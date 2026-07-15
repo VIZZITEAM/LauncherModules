@@ -1,13 +1,15 @@
 package pro.gravit.launchermodules.s3updates;
 
-import pro.gravit.launcher.Launcher;
-import pro.gravit.launcher.config.SimpleConfigurable;
-import pro.gravit.launcher.hasher.HashedDir;
-import pro.gravit.launcher.hasher.HashedFile;
-import pro.gravit.launcher.modules.LauncherInitContext;
-import pro.gravit.launcher.modules.LauncherModule;
-import pro.gravit.launcher.modules.LauncherModuleInfo;
+import pro.gravit.launcher.base.Launcher;
+import pro.gravit.launcher.base.config.SimpleConfigurable;
+import pro.gravit.launcher.base.modules.LauncherInitContext;
+import pro.gravit.launcher.base.modules.LauncherModule;
+import pro.gravit.launcher.base.modules.LauncherModuleInfo;
+import pro.gravit.launcher.base.profiles.ClientProfile;
+import pro.gravit.launcher.core.hasher.HashedDir;
+import pro.gravit.launcher.core.hasher.HashedFile;
 import pro.gravit.launchserver.LaunchServer;
+import pro.gravit.launchserver.auth.profiles.ProfilesProvider;
 import pro.gravit.launchserver.config.LaunchServerConfig;
 import pro.gravit.launchserver.modules.events.LaunchServerFullInitEvent;
 import pro.gravit.launchserver.modules.impl.LaunchServerInitContext;
@@ -23,8 +25,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +39,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
     private LaunchServer server;
     private S3UpdatesProviderConfig config;
     private ScheduledExecutorService refreshExecutor;
+    private volatile Map<String, HashedDir> cachedDirs = Collections.emptyMap();
 
     public S3UpdatesProviderModule() {
         super(new LauncherModuleInfo(MODULE_NAME, version, new String[]{"LaunchServerCore"}));
@@ -53,6 +58,9 @@ public class S3UpdatesProviderModule extends LauncherModule {
         this.server = event.server;
         this.config = loadConfig();
         this.server.commandHandler.registerCommand("s3UpdatesSync", new S3UpdatesSyncCommand(server, this));
+        if (!(this.server.config.profilesProvider instanceof S3ProfilesProvider)) {
+            this.server.config.profilesProvider = new S3ProfilesProvider(this.server.config.profilesProvider, this);
+        }
         if (config.enabled && config.refreshOnStart) {
             syncQuietly();
         }
@@ -72,7 +80,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
     private void syncQuietly() {
         try {
             sync();
-        } catch (IOException e) {
+        } catch (Exception e) {
             LogHelper.error(e);
         }
     }
@@ -106,7 +114,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
         }
 
         Set<String> profiles = selectProfiles(requestedProfiles);
-        Map<String, HashedDir> next = new HashMap<>(server.updatesDirMap);
+        Map<String, HashedDir> next = new HashMap<>(cachedDirs);
         for (String profile : profiles) {
             S3UpdatesProviderConfig.ProfileConfig profileConfig = config.profiles.get(profile);
             if (profileConfig == null) {
@@ -119,7 +127,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
             applyDownloadBinding(profile, profileConfig);
             LogHelper.info("Loaded S3 update index profile=%s version=%s files=%d", profile, index.version, index.files.size());
         }
-        server.updatesDirMap = Collections.unmodifiableMap(next);
+        cachedDirs = Collections.unmodifiableMap(next);
     }
 
     private Set<String> selectProfiles(String... requestedProfiles) {
@@ -176,23 +184,22 @@ public class S3UpdatesProviderModule extends LauncherModule {
         if (file.md5 == null || !file.md5.matches("^[0-9a-fA-F]{32}$")) {
             throw new IOException("Invalid MD5 for " + file.path);
         }
+        if (file.sha1 == null || !file.sha1.matches("^[0-9a-fA-F]{40}$")) {
+            throw new IOException("Invalid SHA-1 for " + file.path);
+        }
     }
 
     private HashedDir buildHashedDir(ClientIndex index) {
         HashedDir root = new HashedDir();
         for (ClientIndex.FileEntry file : index.files) {
-            addFile(root, file.path, file.size, hexToBytes(file.md5));
+            addFile(root, file.path, file.size, hexToBytes(file.sha1));
         }
         return root;
     }
 
     private void addFile(HashedDir root, String path, long size, byte[] md5) {
-        String[] parts = path.split("/");
-        HashedDir current = root;
-        for (int i = 0; i < parts.length - 1; i++) {
-            current = current.getOrCreateDir(parts[i]);
-        }
-        current.putEntry(parts[parts.length - 1], new HashedFile(size, md5));
+        HashedDir.FindRecursiveResult parent = root.createParentDirectories(path);
+        parent.parent.put(parent.name, new HashedFile(size, md5));
     }
 
     private byte[] hexToBytes(String hex) {
@@ -208,6 +215,9 @@ public class S3UpdatesProviderModule extends LauncherModule {
         if (profileConfig.downloadUrl == null || profileConfig.downloadUrl.trim().isEmpty()) {
             return;
         }
+        if (server.config.netty.bindings == null) {
+            server.config.netty.bindings = new HashMap<>();
+        }
         LaunchServerConfig.NettyUpdatesBind bind = server.config.netty.bindings.get(profile);
         if (bind == null) {
             bind = new LaunchServerConfig.NettyUpdatesBind();
@@ -215,5 +225,136 @@ public class S3UpdatesProviderModule extends LauncherModule {
         }
         bind.url = profileConfig.downloadUrl;
         bind.zip = false;
+    }
+
+    private HashedDir getCachedClientDir(ClientProfile profile) {
+        if (profile == null) {
+            return null;
+        }
+        HashedDir dir = cachedDirs.get(profile.getDir());
+        if (dir != null) {
+            return dir;
+        }
+        return cachedDirs.get(profile.getTitle());
+    }
+
+    private static class WrappedCompletedProfile implements ProfilesProvider.CompletedProfile {
+        private final ProfilesProvider.CompletedProfile delegate;
+        private final HashedDir clientDir;
+
+        private WrappedCompletedProfile(ProfilesProvider.CompletedProfile delegate, HashedDir clientDir) {
+            this.delegate = delegate;
+            this.clientDir = clientDir;
+        }
+
+        @Override
+        public String getTag() {
+            return delegate.getTag();
+        }
+
+        @Override
+        public HashedDir getClientDir() {
+            return clientDir;
+        }
+
+        @Override
+        public HashedDir getAssetDir() {
+            return delegate.getAssetDir();
+        }
+
+        @Override
+        public ClientProfile getProfile() {
+            return delegate.getProfile();
+        }
+
+        @Override
+        public UUID getUuid() {
+            return delegate.getUuid();
+        }
+
+        @Override
+        public String getName() {
+            return delegate.getName();
+        }
+
+        @Override
+        public String getDescription() {
+            return delegate.getDescription();
+        }
+
+        @Override
+        public String getDefaultTag() {
+            return delegate.getDefaultTag();
+        }
+    }
+
+    private static class S3ProfilesProvider extends ProfilesProvider {
+        private final ProfilesProvider delegate;
+        private final S3UpdatesProviderModule module;
+
+        private S3ProfilesProvider(ProfilesProvider delegate, S3UpdatesProviderModule module) {
+            this.delegate = delegate;
+            this.module = module;
+        }
+
+        private CompletedProfile wrap(CompletedProfile profile) {
+            if (profile == null) {
+                return null;
+            }
+            HashedDir cached = module.getCachedClientDir(profile.getProfile());
+            return cached == null ? profile : new WrappedCompletedProfile(profile, cached);
+        }
+
+        @Override
+        public void init(LaunchServer server) {
+            super.init(server);
+            delegate.init(server);
+        }
+
+        @Override
+        public UncompletedProfile create(String name, String description, CompletedProfile defaultProfile) {
+            return delegate.create(name, description, defaultProfile);
+        }
+
+        @Override
+        public void delete(UncompletedProfile profile) {
+            delegate.delete(profile);
+        }
+
+        @Override
+        public Set<UncompletedProfile> getProfiles(pro.gravit.launchserver.socket.Client client) {
+            return delegate.getProfiles(client);
+        }
+
+        @Override
+        public CompletedProfile pushUpdate(UncompletedProfile profile, String tag, ClientProfile clientProfile, List<ProfileAction> update, List<ProfileAction> assetUpdate, List<UpdateFlag> flags) throws IOException {
+            return wrap(delegate.pushUpdate(profile, tag, clientProfile, update, assetUpdate, flags));
+        }
+
+        @Override
+        public void download(CompletedProfile profile, Map<String, java.nio.file.Path> files, boolean assets) throws IOException {
+            delegate.download(profile, files, assets);
+        }
+
+        @Override
+        public HashedDir getUnconnectedDirectory(String name) {
+            HashedDir cached = module.cachedDirs.get(name);
+            return cached == null ? delegate.getUnconnectedDirectory(name) : cached;
+        }
+
+        @Override
+        public CompletedProfile get(UUID uuid, String tag) {
+            return wrap(delegate.get(uuid, tag));
+        }
+
+        @Override
+        public CompletedProfile get(String name, String tag) {
+            return wrap(delegate.get(name, tag));
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
     }
 }

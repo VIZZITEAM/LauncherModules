@@ -13,6 +13,8 @@ public class ClientIndex {
         public String path;
         public long size;
         public String md5;
+        public String sha1;
+        public String sha512;
         public String sha256;
     }
 }
