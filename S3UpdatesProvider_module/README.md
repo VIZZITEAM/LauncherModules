@@ -15,6 +15,7 @@ Default ZombiePlague config:
 {
   "enabled": true,
   "refreshOnStart": true,
+  "refreshIntervalSeconds": 60,
   "profiles": {
     "ZombiePlague": {
       "indexUrl": "https://cdn.zombieplague.net/public/clients/ZombiePlague/1.7.10/index.json",

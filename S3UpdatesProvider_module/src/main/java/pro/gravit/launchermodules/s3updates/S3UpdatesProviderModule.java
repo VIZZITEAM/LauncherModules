@@ -25,12 +25,16 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class S3UpdatesProviderModule extends LauncherModule {
     public static final Version version = new Version(1, 0, 0, 1, Version.Type.BETA);
     private static final String MODULE_NAME = "S3UpdatesProvider";
     private LaunchServer server;
     private S3UpdatesProviderConfig config;
+    private ScheduledExecutorService refreshExecutor;
 
     public S3UpdatesProviderModule() {
         super(new LauncherModuleInfo(MODULE_NAME, version, new String[]{"LaunchServerCore"}));
@@ -50,11 +54,26 @@ public class S3UpdatesProviderModule extends LauncherModule {
         this.config = loadConfig();
         this.server.commandHandler.registerCommand("s3UpdatesSync", new S3UpdatesSyncCommand(server, this));
         if (config.enabled && config.refreshOnStart) {
-            try {
-                sync();
-            } catch (IOException e) {
-                LogHelper.error(e);
-            }
+            syncQuietly();
+        }
+        if (config.enabled && config.refreshIntervalSeconds > 0) {
+            refreshExecutor = Executors.newSingleThreadScheduledExecutor((task) -> {
+                Thread thread = new Thread(task, "S3UpdatesProvider refresh");
+                thread.setDaemon(true);
+                return thread;
+            });
+            refreshExecutor.scheduleWithFixedDelay(this::syncQuietly,
+                    config.refreshIntervalSeconds,
+                    config.refreshIntervalSeconds,
+                    TimeUnit.SECONDS);
+        }
+    }
+
+    private void syncQuietly() {
+        try {
+            sync();
+        } catch (IOException e) {
+            LogHelper.error(e);
         }
     }
 
@@ -70,7 +89,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
         return loaded == null ? new S3UpdatesProviderConfig() : loaded;
     }
 
-    public void sync(String... requestedProfiles) throws IOException {
+    public synchronized void sync(String... requestedProfiles) throws IOException {
         if (server == null) {
             throw new IOException("LaunchServer is not initialized");
         }

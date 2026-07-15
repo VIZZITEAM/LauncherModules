@@ -6,6 +6,7 @@ import java.util.Map;
 public class S3UpdatesProviderConfig {
     public boolean enabled = true;
     public boolean refreshOnStart = true;
+    public long refreshIntervalSeconds = 60L;
     public Map<String, ProfileConfig> profiles = defaultProfiles();
 
     private static Map<String, ProfileConfig> defaultProfiles() {
