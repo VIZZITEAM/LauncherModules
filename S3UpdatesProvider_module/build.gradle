@@ -1,0 +1,14 @@
+def mainClassName = "pro.gravit.launchermodules.s3updates.S3UpdatesProviderModule"
+
+sourceCompatibility = '1.8'
+targetCompatibility = '1.8'
+
+dependencies {
+    compileOnly project(':LaunchServer')
+    compileOnly project(':LauncherAPI')
+    compileOnly project(':LauncherCore')
+}
+
+jar {
+    manifest.attributes("Module-Main-Class": mainClassName)
+}
