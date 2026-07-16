@@ -23,13 +23,26 @@ class S3UpdatesPathPolicyTest(unittest.TestCase):
             '".git"',
             '".github"',
             '".deploy"',
+            '"tests"',
             '".gitignore"',
             '".gitattributes"',
             '".rawignore"',
             '"README.md"',
             '"upload-raw-client.bat"',
+            '"download-raw-client.bat"',
+            '"setup-s3-env.bat"',
         ]:
             self.assertIn(denied, source)
+
+    def test_s3_updates_does_not_poll_by_default(self):
+        config = (ROOT / "S3UpdatesProvider_module/src/main/java/pro/gravit/launchermodules/s3updates/S3UpdatesProviderConfig.java").read_text(encoding="utf-8")
+        readme = (ROOT / "S3UpdatesProvider_module/README.md").read_text(encoding="utf-8")
+
+        self.assertIn("refreshOnStart = true", config)
+        self.assertIn("refreshIntervalSeconds = 0L", config)
+        self.assertNotIn("refreshIntervalSeconds = 60L", config)
+        self.assertIn('"refreshIntervalSeconds": 0', readme)
+        self.assertIn("after each deploy", readme)
 
 
 if __name__ == "__main__":

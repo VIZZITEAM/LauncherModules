@@ -203,11 +203,14 @@ public class S3UpdatesProviderModule extends LauncherModule {
         return ".git".equals(firstSegment)
                 || ".github".equals(firstSegment)
                 || ".deploy".equals(firstSegment)
+                || "tests".equals(firstSegment)
                 || ".gitignore".equals(path)
                 || ".gitattributes".equals(path)
                 || ".rawignore".equals(path)
                 || "README.md".equals(path)
-                || "upload-raw-client.bat".equals(path);
+                || "upload-raw-client.bat".equals(path)
+                || "download-raw-client.bat".equals(path)
+                || "setup-s3-env.bat".equals(path);
     }
 
     private HashedDir buildHashedDir(ClientIndex index) {
