@@ -175,7 +175,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
         if (file.path.startsWith("/") || file.path.contains("..") || file.path.contains("//")) {
             throw new IOException("Unsafe index file path: " + file.path);
         }
-        if (!(file.path.startsWith("mods/") || file.path.startsWith("data/"))) {
+        if (!isSupportedClientPath(file.path)) {
             throw new IOException("Unsupported index file path: " + file.path);
         }
         if (file.size < 0) {
@@ -187,6 +187,21 @@ public class S3UpdatesProviderModule extends LauncherModule {
         if (file.sha1 == null || !file.sha1.matches("^[0-9a-fA-F]{40}$")) {
             throw new IOException("Invalid SHA-1 for " + file.path);
         }
+    }
+
+    private boolean isSupportedClientPath(String path) {
+        if (path.startsWith("config/")
+                || path.startsWith("data/")
+                || path.startsWith("libraries/")
+                || path.startsWith("mods/")
+                || path.startsWith("natives/")
+                || path.startsWith("resourcepacks/")
+                || path.startsWith("shaderpacks/")) {
+            return true;
+        }
+        return "minecraft.jar".equals(path)
+                || "forge.jar".equals(path)
+                || "servers.dat".equals(path);
     }
 
     private HashedDir buildHashedDir(ClientIndex index) {
