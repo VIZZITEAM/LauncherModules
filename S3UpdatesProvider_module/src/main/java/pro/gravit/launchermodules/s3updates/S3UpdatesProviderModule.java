@@ -175,7 +175,7 @@ public class S3UpdatesProviderModule extends LauncherModule {
         if (file.path.startsWith("/") || file.path.contains("..") || file.path.contains("//")) {
             throw new IOException("Unsafe index file path: " + file.path);
         }
-        if (!isSupportedClientPath(file.path)) {
+        if (isDeniedClientPath(file.path)) {
             throw new IOException("Unsupported index file path: " + file.path);
         }
         if (file.size < 0) {
@@ -189,19 +189,25 @@ public class S3UpdatesProviderModule extends LauncherModule {
         }
     }
 
-    private boolean isSupportedClientPath(String path) {
-        if (path.startsWith("config/")
-                || path.startsWith("data/")
-                || path.startsWith("libraries/")
-                || path.startsWith("mods/")
-                || path.startsWith("natives/")
-                || path.startsWith("resourcepacks/")
-                || path.startsWith("shaderpacks/")) {
+    private boolean isDeniedClientPath(String path) {
+        String firstSegment = path;
+        int slashIndex = path.indexOf('/');
+        if (slashIndex >= 0) {
+            firstSegment = path.substring(0, slashIndex);
+        }
+
+        if (firstSegment.isEmpty() || firstSegment.startsWith(".")) {
             return true;
         }
-        return "minecraft.jar".equals(path)
-                || "forge.jar".equals(path)
-                || "servers.dat".equals(path);
+
+        return ".git".equals(firstSegment)
+                || ".github".equals(firstSegment)
+                || ".deploy".equals(firstSegment)
+                || ".gitignore".equals(path)
+                || ".gitattributes".equals(path)
+                || ".rawignore".equals(path)
+                || "README.md".equals(path)
+                || "upload-raw-client.bat".equals(path);
     }
 
     private HashedDir buildHashedDir(ClientIndex index) {
